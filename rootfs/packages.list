@@ -1,0 +1,48 @@
+# 装进 rootfs 的软件包（一行一个，# 开头为注释）
+# 说明：这是最小可用的“能开机 + 能 SSH + 能调试”集合，按需增删后重新编译即可。
+# 注意：不要加 initramfs-tools / linux-image-* —— 本方案不引导 initrd，装了只会拖慢并可能报错。
+
+# --- 基础系统 / 远程登录 ---
+openssh-server
+sudo
+systemd-timesyncd
+# 注意：Ubuntu 里 systemd-resolved / systemd-networkd 都在 systemd 包里，没有单独的 systemd-resolved 包
+# （写在这里会 apt 报 "Unable to locate package"）
+dbus
+kmod
+procps
+e2fsprogs
+dosfstools
+parted
+util-linux
+tzdata
+less
+nano
+bash-completion
+ca-certificates
+curl
+wget
+gnupg
+rsync
+unzip
+zip
+
+# --- 网络 ---
+iproute2
+iputils-ping
+net-tools
+dnsutils
+iw
+wireless-tools
+wpasupplicant
+rfkill
+
+# --- 硬件调试 / 外设 ---
+usbutils
+pciutils
+i2c-tools
+alsa-utils
+evtest
+htop
+lsof
+strace

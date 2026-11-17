@@ -1,0 +1,97 @@
+RK3188 盒子刷机步骤（瑞芯微开发工具 v2.58）
+=================================================
+
+本目录里的文件
+--------------
+  boot.img        内核 + 设备树        -> 分区地址 0x00002000（boot）
+  rootfs.img      ext4 根文件系统      -> 分区地址 0x0000A000（rootfs）
+  parameter.txt   分区表（仅供参考，见下方警告）
+  sha256sum.txt   校验值
+
+分区表（与 parameter.txt、刷机工具截图一致）
+--------------------------------------------
+  #1  Loader      0x00000000    原机自带，不要替换
+  #2  Parameter   0x00000000    原机自带，不要随便替换
+  #3  boot        0x00002000    刷 boot.img（16MB）
+  #4  rootfs      0x0000A000    刷 rootfs.img（剩余全部空间）
+
+!!! 重要 !!!
+Loader 和 Parameter 是“引导 + 分区表”，刷错会直接变砖且无法靠刷 boot/rootfs 救回。
+本项目只负责提供 boot.img 和 rootfs.img，Loader / Parameter 请一律使用原机备份。
+只有当原 Parameter 的分区布局确实与本文件一致、并且你已完整备份原机时，才可以考虑刷 Parameter。
+
+刷机前必须做的备份
+--------------------
+  1. 用瑞芯微开发工具“高级功能”里的“导出镜像”，或先用原厂 update.img 备份整机。
+  2. 记下原 Parameter 内容（尤其 CMDLINE 里的 root=/dev/mmcblk?p?）。
+     本项目默认 root=/dev/mmcblk0p1（eMMC = mmcblk0，见 dts 里 aliases 的说明）。
+     若你的原 Parameter 是 root=/dev/mmcblk1p1，请改 dts 的 aliases 后重新编译。
+
+刷机前在原系统里核对三件事（很重要，能省掉 90% 的“刷完起不来”）
+---------------------------------------------------------------
+  a) 根设备是不是 mmcblk0p1：
+        cat /proc/cmdline        # 看 root=...
+        mount | grep ' / '      # 看根分区挂在哪个设备
+        ls -l /dev/mmcblk*      # 看分区是否存在（p1/p2...）
+     如果显示的是 /dev/mmcblk1p1 或 /dev/mmcblk2p1，说明 eMMC 控制器编号与我假设的不同：
+        - 方案一（推荐）：改 dts/rk3188-adesk.dts 的 aliases（注释里写了原写法），重新编译 boot.img；
+        - 方案二：把原 Parameter 的 root= 改成 /dev/mmcblk0p1（需要重刷 Parameter，风险自负）。
+  b) 根分区起始地址是不是 0xA000（20MB）：cat /proc/partitions 里 mmcblk0p1 的起始块号，
+     与 Parameter 的 mtdparts 中 rootfs 的 @0x0000A000 对得上才说明分区表和项目假设一致。
+  c) 原来能正常进系统、串口能出日志 —— 确认 TTL 接的是 UART2（0x20064000），
+     否则刷完看不到输出会误判“变砖”。
+
+刷机步骤
+--------
+  1. 打开“瑞芯微开发工具 v2.58”，切到“下载镜像”页。
+  2. 列表里勾选第 3 行 boot（地址 0x00002000），点右侧文件选择 out/boot.img。
+  3. 勾选第 4 行 rootfs（地址 0x0000A000），选择 out/rootfs.img。
+  4. 第 1 行 Loader、第 2 行 Parameter 保持不勾选（用板子里原有的）。
+  5. 盒子断电 -> 按住复位键/短接 Recovery 点（不同机型不同，见下）-> 插 USB -> 上电。
+     工具识别到设备后（状态栏显示“发现设备”），松开按键。
+  6. 点“执行”，等待烧写完成（rootfs 2GB 大约 1~3 分钟）。
+  7. 断开 USB，断电重启。
+
+进入 Loader 模式的常见方法
+--------------------------
+  * 机身有复位孔：牙签按住复位孔不放，插 USB 线上电，工具识别后松手。
+  * 无复位孔：短接 eMMC 的 CLK 与 GND（或 NAND 的对应脚）后上电。
+  * 部分盒子：上电瞬间连续按遥控器/面板电源键。
+  * 已经能进系统：`reboot loader` 或 `reboot update` 也能进 Loader。
+
+首次开机
+--------
+  * 串口：TTL 接 UART2（0x20064000），115200 8N1，能看到内核日志和登录提示。
+  * 默认账号：root，密码见编译时的 ROOTFS_PASSWORD（默认 rockchip）。
+  * 有线网口 DHCP 自动获取地址；`ip a` 查看 IP 后可用 SSH 登录。
+  * rootfs 镜像为了便于下载被缩到最小，如果 rootfs 分区比镜像大，进系统后执行：
+        resize2fs /dev/mmcblk0p1
+    即可用满整个分区。
+  * 不要 `apt upgrade` 升级内核相关包，也不要装 linux-image-*（会覆盖本项目的内核/模块）。
+
+常见故障
+--------
+  1. 刷完无任何串口输出
+     - Loader/Parameter 是否还是原机的？boot 分区是否真的写进去了？
+     - boot.img 页大小不对：把 BOOT_PAGESIZE 改成 2048 重新打包再刷。
+  2. 有内核日志但停在 “VFS: Unable to mount root fs ...”
+     - Parameter 的 CMDLINE root= 与本机 eMMC 编号不一致（mmcblk0 / mmcblk1）。
+     - rootfs.img 没刷或者分区地址不对（应为 0x0000A000）。
+  3. 日志停在 “Starting kernel ...” 之后立刻重启
+     - dtb 不匹配（内存大小、PMIC 电压）。
+     - 供电不足：换 5V/2A 以上电源，去掉 USB 外设再试。
+  4. 起来了但没有网络
+     - `ip a` 看网口名；`systemctl status systemd-networkd`。
+     - 网口灯不亮多半是 emac/phy 引脚或 PHY 地址问题，需要改 dts。
+  5. 电源键/指示灯不对
+     - 本项目 gpio-keys 用的是你 DTS 里的 gpio0 PA4；若按键无效，改成 PB4（gpio0 RK_PB4）再编译。
+     - 蓝灯 PB6（低电平亮）、红灯 PB7（高电平亮），可用 `ls /sys/class/leds` 验证。
+  6. 想回退
+     - 用备份的原机镜像/原厂 update.img 重新刷即可（Loader 没动就一定能救）。
+
+串口日志建议
+------------
+  在串口终端里保存完整启动日志，出问题时按日志定位。
+  本项目 Parameter 里保留了 earlyprintk：主线内核没有编译 DEBUG_LL 时它不会输出，
+  真正有效的是 console=ttyS2,115200（8250 驱动 probe 之后开始有日志）。
+  想更早看到日志，可以给内核加 earlycon（依赖 DT 的 stdout-path，本项目 DTS 已指向 serial2）。

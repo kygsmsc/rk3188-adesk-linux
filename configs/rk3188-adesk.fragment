@@ -1,0 +1,75 @@
+# =============================================================================
+# RK3188 aDesk-STD 盒子 —— 6.12 内核配置补充片段（fragment）
+# -----------------------------------------------------------------------------
+# 原 rk3188_adesk_defconfig 来自 Armbian 5.10 内核，直接拿到 6.12 上用时会有两类问题：
+#   1) 新内核新增/删除的 Kconfig 符号需要 olddefconfig 补齐（脚本里已做）；
+#   2) 本机 DTS 用到的几个驱动在原配置里是 <m>（模块）或未开启，
+#      会导致“内核起来了但声卡/红外/RTC/电源键不工作”，或者必须依赖 modules_install。
+#
+# 本片段只做“补齐 + 内置”，不改原配置的其它内容；由 scripts/kernel-build.sh
+# 用内核自带的 scripts/kconfig/merge_config.sh 合并到 .config 之后执行 olddefconfig。
+# =============================================================================
+
+# --- 必须内置（DTS 里已启用，原配置为 <m> 或未开） -----------------------------
+# 红外接收（DTS: ir_recv / gpio-ir-receiver），原配置 CONFIG_IR_GPIO_CIR=m
+CONFIG_IR_GPIO_CIR=y
+
+# RK808 PMIC 供电树（DTS: rk808@1b、vdd_cpu/vcc_ddr/vcc_io）
+# 【关键修正】6.x 内核里 MFD 符号已从 CONFIG_MFD_RK808 改名为 CONFIG_MFD_RK8XX；
+# 直接沿用 5.10 的 MFD_RK808 会导致整个 RK808 驱动链（MFD/稳压器/时钟/RTC）被静默丢弃，
+# 表现就是“内核能起一半、供电或 RTC 全不对”，严重时直接起不来。
+CONFIG_MFD_RK8XX=y
+CONFIG_MFD_RK8XX_I2C=y
+CONFIG_REGULATOR_RK808=y
+CONFIG_COMMON_CLK_RK808=y
+# RK808 自带的 RTC（原配置未开启）
+CONFIG_RTC_DRV_RK808=y
+
+# ES8316 音频编解码 + simple-audio-card（DTS: sound / es8316@10）
+CONFIG_SND_SOC=y
+CONFIG_SND_SIMPLE_CARD=y
+CONFIG_SND_SOC_ES8316=y
+CONFIG_SND_SOC_ROCKCHIP=y
+CONFIG_SND_SOC_ROCKCHIP_I2S=y
+
+# GPIO 电源键 / LED（DTS: gpio-keys / gpio-leds）
+CONFIG_KEYBOARD_GPIO=y
+CONFIG_LEDS_GPIO=y
+
+# eMMC / SD 卡控制器（DTS: emmc / mmc0）
+CONFIG_MMC=y
+CONFIG_MMC_DW=y
+CONFIG_MMC_DW_ROCKCHIP=y
+
+# USB Host（DTS: usb_host / usb_otg / usbphy）
+CONFIG_USB=y
+CONFIG_USB_DWC2=y
+CONFIG_USB_DWC2_HOST=y
+CONFIG_USB_EHCI_HCD_PLATFORM=y
+CONFIG_USB_OHCI_HCD_PLATFORM=y
+CONFIG_USB_STORAGE=y
+
+# 百兆以太网（DTS: emac + phy0），RK3188 GMAC 走 dwmac-rockchip
+CONFIG_STMMAC_ETH=y
+CONFIG_STMMAC_PLATFORM=y
+CONFIG_DWMAC_ROCKCHIP=y
+
+# 串口控制台（DTS: uart2 = ttyS2）
+CONFIG_SERIAL_8250=y
+CONFIG_SERIAL_8250_DW=y
+CONFIG_SERIAL_8250_CONSOLE=y
+
+# --- 追加设备树支持 -----------------------------------------------------------
+# 只有打开它，cat zImage + dtb 的方式才能被内核识别（教程第 6 步的核心前提）
+CONFIG_ARM_APPENDED_DTB=y
+# 让 Parameter 里的 CMDLINE 生效，不被内核内置 cmdline 强制覆盖
+CONFIG_CMDLINE=""
+# CONFIG_CMDLINE_FORCE is not set
+
+# --- 精简：明显拖慢 CI、本机又用不到的大包 ------------------------------------
+# 一次性编所有 ALSA 编解码器（几百个模块，纯浪费 10+ 分钟编译时间）
+# CONFIG_SND_SOC_ALL_CODECS is not set
+# CONFIG_SND_SOC_WM_HUBS is not set
+
+# 内核版本后缀保持为空，模块目录就是 6.12.117，方便对照教程
+CONFIG_LOCALVERSION=""
