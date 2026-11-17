@@ -1,0 +1,83 @@
+#!/bin/sh
+# RK3188 盒子开机第一个进程（initramfs 里的 /init）
+#
+# 背景：这块盒子的 eMMC 上没有任何分区表（内核日志里只有 mmcblk0 / mmcblk0boot0 / mmcblk0boot1，
+# 没有 mmcblk0p1），所以 Parameter 里 root=/dev/mmcblk0p1 必然 panic：
+#   VFS: Cannot open root device "/dev/mmcblk0p1" or unknown-block(179,1): error -6
+#
+# 这里用两种方式找根文件系统，任一成功就 switch_root：
+#   1) 有分区表 -> 直接挂 p1..p4（以后你重建了 GPT/MBR 也不受影响）
+#   2) 没分区表 -> 用 loop 设备按固定偏移挂 eMMC 的裸区域（rootfs.img 刷在 0x0000A000 扇区 = 20MB）
+#
+# 偏移量在编译时由 scripts/initramfs-build.sh 填进来，不用改 Parameter、也不用动 Loader。
+
+/bin/busybox --install -s /bin 2>/dev/null
+
+mount -t proc     proc     /proc 2>/dev/null
+mount -t sysfs    sysfs    /sys  2>/dev/null
+if ! mount -t devtmpfs devtmpfs /dev 2>/dev/null; then
+    [ -e /dev/console ] || mknod /dev/console c 5 1
+    [ -e /dev/null ]    || mknod /dev/null    c 1 3
+fi
+
+ROOTFS_OFFSET_SECTORS=@@OFFSET_SECTORS@@       # 0x0000A000 = 40960 扇区 = 20MB
+ROOTFS_OFFSET_BYTES=$((ROOTFS_OFFSET_SECTORS * 512))
+
+echo
+echo "[initramfs] RK3188 rootfs 查找中：偏移 ${ROOTFS_OFFSET_SECTORS} 扇区（${ROOTFS_OFFSET_BYTES} 字节）"
+
+mkdir -p /newroot
+MOUNTED=0
+
+# --- 1) 有分区表的情况（优先，最标准） ---
+for disk in /dev/mmcblk0 /dev/mmcblk1 /dev/mmcblk2; do
+    [ -b "$disk" ] || continue
+    for p in 1 2 3 4; do
+        part="${disk}p${p}"
+        [ -b "$part" ] || continue
+        if mount -t ext4 -o rw,noatime "$part" /newroot 2>/dev/null; then
+            echo "[initramfs] 已挂载分区 ${part} 作为根目录"
+            MOUNTED=1
+            break
+        fi
+    done
+    [ "$MOUNTED" = 1 ] && break
+done
+
+# --- 2) 没有分区表：按偏移 loop 挂载 ---
+if [ "$MOUNTED" = 0 ]; then
+    for disk in /dev/mmcblk0 /dev/mmcblk1; do
+        [ -b "$disk" ] || continue
+        loop="$(losetup -f 2>/dev/null)"
+        [ -n "$loop" ] || continue
+        if losetup -o "$ROOTFS_OFFSET_BYTES" "$loop" "$disk" 2>/dev/null; then
+            if mount -t ext4 -o rw,noatime "$loop" /newroot 2>/dev/null; then
+                echo "[initramfs] 无分区表，已按偏移挂载 ${disk}+${ROOTFS_OFFSET_BYTES}（${loop}）作为根目录"
+                MOUNTED=1
+                break
+            fi
+            losetup -d "$loop" 2>/dev/null
+        fi
+    done
+fi
+
+if [ "$MOUNTED" = 0 ]; then
+    echo
+    echo "[initramfs] ================ 启动失败 ================"
+    echo " 找不到可用的根文件系统，请按顺序检查："
+    echo "  1. rootfs.img 是否刷到了 0x0000A000（20MB 偏移，对应 40960 扇区）"
+    echo "  2. rootfs.img 是不是本项目 out/ 里的那个（ext4，标签 rootfs）"
+    echo "  3. eMMC 是否真的存在（上电后能看到 mmcblk0）"
+    echo " 下面是当前块设备列表，可对照："
+    ls -l /dev/mmcblk* 2>/dev/null
+    echo "[initramfs] ======================================="
+    exec /bin/sh
+fi
+
+if [ ! -x /newroot/sbin/init ]; then
+    echo "[initramfs] 警告：/sbin/init 不存在，进 rescue shell"
+    exec /bin/sh
+fi
+
+echo "[initramfs] 切换根目录并启动 /sbin/init"
+exec switch_root /newroot /sbin/init

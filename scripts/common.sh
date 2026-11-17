@@ -31,6 +31,8 @@ ROOTFS_PASSWORD="${ROOTFS_PASSWORD:-rockchip}"
 ROOTFS_HOSTNAME="${ROOTFS_HOSTNAME:-rk3188-adesk}"
 # 根分区设备：必须与 Parameter 的 CMDLINE root= 一致，也与 DTS 里 aliases（eMMC→mmcblk0）对应
 ROOT_DEVICE="${ROOT_DEVICE:-/dev/mmcblk0p1}"
+# rootfs.img 在 eMMC 上的起始扇区（= Parameter 里 mtdparts 的 rootfs @0x0000A000）
+ROOTFS_OFFSET_SECTORS="${ROOTFS_OFFSET_SECTORS:-40960}"
 ROOTFS_TARBALL_URL="${ROOTFS_TARBALL_URL:-https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-base-22.04.5-base-armhf.tar.gz}"
 
 mkdir -p "$BUILD_DIR" "$OUT_DIR" "$CACHE_DIR"

@@ -91,7 +91,7 @@ cat > /etc/motd <<'EOF'
   -------------------------------------------------------
   串口控制台 : ttyS2 115200 8N1
   登录        : root / 编译时设定的密码
-  扩容根分区  : resize2fs /dev/mmcblk0p1   (刷入更大分区后执行)
+  扩容根分区  : resize2fs "$(findmnt -no SOURCE /)"   (根在 loop 设备上时同样适用)
   看内核日志  : dmesg | tail  /  journalctl -b
 
 EOF

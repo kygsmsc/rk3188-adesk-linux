@@ -192,6 +192,10 @@
 
 &emac {
 	phy-handle = <&phy0>;
+	/* [新增 2026-11] 实机日志报 "failed to retrieve phy description from device tree (-19)"：
+	 * 缺 phy-mode 时 of_get_phy_mode() 直接返回 -ENODEV，驱动连 PHY 都不去连。
+	 * 本机是 RMII 100M（硬件规格：rmii，100M），必须显式声明。 */
+	phy-mode = "rmii";
 	pinctrl-names = "default";
 	pinctrl-0 = <&emac_xfer>, <&emac_mdio>;
 	status = "okay";

@@ -9,6 +9,7 @@ ZIMAGE="$OUT_DIR/zImage"
 DTB="$OUT_DIR/$TARGET.dtb"
 KDTB="$OUT_DIR/kernel-dtb"
 BOOTIMG="$OUT_DIR/boot.img"
+RAMDISK="$OUT_DIR/initramfs.cpio.gz"   # 由 scripts/initramfs-build.sh 生成，解决“eMMC 无分区表”问题
 
 step "1/5 准备 mkbootimg 工具"
 if [ ! -d "$MKB_DIR" ]; then
@@ -29,11 +30,17 @@ cat "$ZIMAGE" "$DTB" > "$KDTB"
 log "kernel-dtb 大小：$(du -h "$KDTB" | cut -f1)"
 
 step "4/5 生成 boot.img（pagesize=${BOOT_PAGESIZE}）"
-"$MKB_DIR/mkbootimg" \
-    --kernel "$KDTB" \
-    --pagesize "$BOOT_PAGESIZE" \
-    --board "rk3188-adesk" \
-    -o "$BOOTIMG" || die "mkbootimg 执行失败"
+# 有 initramfs 就一起打进去：开机先跑 /init，用 loop 按偏移挂载 rootfs.img，
+# 这样 eMMC 没有分区表（没有 mmcblk0p1）也能进系统。
+MKB_ARGS=(--kernel "$KDTB" --pagesize "$BOOT_PAGESIZE" --board "rk3188-adesk" -o "$BOOTIMG")
+if [ -f "$RAMDISK" ]; then
+    log "附带 initramfs：$(du -h "$RAMDISK" | cut -f1)（按偏移挂载 rootfs）"
+    MKB_ARGS+=(--ramdisk "$RAMDISK")
+else
+    warn "没有 out/initramfs.cpio.gz —— 本次 boot.img 不含 ramdisk，"
+    warn "只有 eMMC 存在分区表（/dev/mmcblk0p1）时才能挂载 rootfs，否则会 panic"
+fi
+"$MKB_DIR/mkbootimg" "${MKB_ARGS[@]}" || die "mkbootimg 执行失败"
 
 BOOT_BYTES=$(stat -c%s "$BOOTIMG")
 log "boot.img 大小：$(du -h "$BOOTIMG" | cut -f1)（${BOOT_BYTES} 字节）"

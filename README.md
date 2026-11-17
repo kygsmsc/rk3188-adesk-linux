@@ -43,6 +43,7 @@ sudo ./build.sh --install-deps     # 只装依赖
 
 ```bash
 ./build.sh kernel     # 只编内核 / dtb / 模块
+./build.sh initramfs  # 只做 initramfs
 ./build.sh rootfs     # 只做 rootfs.img（会带上已编好的内核模块）
 ./build.sh pack       # 只把 zImage + dtb 打成 boot.img
 ./build.sh deps       # 只检查依赖
@@ -86,7 +87,7 @@ JOBS=8 ./build.sh all
 > 刷机前务必用工具“高级功能”导出原机镜像做备份。
 
 首次开机：TTL 接 **UART2（ttyS2，115200 8N1）** 看日志；默认 `root` / 编译时设定的密码（默认 `rockchip`）；
-有线网口 DHCP 自动联网；rootfs 镜像为了便于下载被缩到最小，进系统后 `resize2fs /dev/mmcblk0p1` 用满整个分区。
+有线网口 DHCP 自动联网；rootfs 镜像为了便于下载被缩到最小，进系统后 `resize2fs "$(findmnt -no SOURCE /)"` 用满整个分区（无分区表时根在 `/dev/loop0`，照样适用）。
 
 ---
 
@@ -98,6 +99,8 @@ rk3188-adesk-linux/
 ├── scripts/
 │   ├── common.sh                # 路径、日志、下载、sudo、binfmt 等公共函数
 │   ├── kernel-build.sh          # 内核：源码 -> defconfig + 片段 -> zImage/dtb/模块
+│   ├── initramfs-build.sh       # 生成 initramfs（按偏移挂载 rootfs，eMMC 无分区表时必需）
+│   ├── mk-newc.py               # 不依赖 cpio 命令的 newc 打包器
 │   ├── rootfs-build.sh          # rootfs：Ubuntu Base -> chroot 配置 -> ext4 镜像
 │   ├── rootfs-setup.sh          # 在 armhf chroot 内部执行的配置脚本
 │   └── pack-build.sh            # boot.img 打包（rockchip-mkbootimg）
@@ -105,7 +108,9 @@ rk3188-adesk-linux/
 │   ├── rk3188_adesk_defconfig   # 你提供的、来自 Armbian 5.10 的 defconfig
 │   └── rk3188-adesk.fragment    # 6.12 适配片段：把本机要用的驱动改成内置
 ├── dts/
-│   └── rk3188-adesk.dts         # 你提供的设备树（仅一处改动，见第 5 节）
+│   └── rk3188-adesk.dts         # 你提供的设备树（最小改动，均带注释，见第 5 节）
+├── boot/
+│   └── initramfs-init           # initramfs 里的 /init：按偏移 loop 挂载 rootfs.img
 ├── rootfs/
 │   └── packages.list            # 装进根文件系统的软件包清单
 ├── flash/
@@ -185,7 +190,65 @@ rk3188-adesk-linux/
 
 ---
 
-## 6. 已知限制
+## 6. 实机 TTL 日志诊断（2026-11 首次刷机）
+
+首次刷入后串口日志停在最后，关键几行：
+
+```
+[    2.243826] mmcblk0: mmc0:0001 004GA1 3.69 GiB
+[    2.252557] mmcblk0boot0: mmc0:0001 004GA1 2.00 MiB
+[    2.355109] /dev/root: Can't open blockdev
+[    2.359772] VFS: Cannot open root device "/dev/mmcblk0p1" or unknown-block(179,1): error -6
+[    2.369179] Please append a correct "root=" boot option; here are the available partitions:
+[    2.378595] b300         3866624 mmcblk0
+[    2.386281] b320            2048 mmcblk0boot0
+[    2.393944] b340            2048 mmcblk0boot1
+[    2.421289] Kernel panic - not syncing: VFS: Unable to mount root fs
+```
+
+结论：**内核本身完全正常**（PMIC、eMMC、RTC、声卡 ES8316、gpio-keys 都起来了），
+问题只有一个 —— 这块 eMMC 上**没有任何分区表**：日志里只有 `mmcblk0 / boot0 / boot1`，
+没有 `mmcblk0p1`，所以 Parameter 里的 `root=/dev/mmcblk0p1` 找不到设备，必然 panic（error -6 = ENXIO）。
+
+这也解释了为什么“按 0x2000 / 0xA000 裸地址刷”能刷进去却起不来：Rockchip 的 Loader 按地址找镜像，
+而 **Linux 内核只认块设备分区表**（GPT/MBR），不认 Parameter 里的 mtdparts。
+
+### 解决办法（本项目已内置，不用改 Parameter、不用动 Loader）
+
+`boot.img` 里附带一个极小的 initramfs（armhf 静态 busybox，约 0.8MB），开机先跑 `/init`：
+
+1. 先按常规找 `mmcblk0p1..p4`（以后你重建了分区表也能用）；
+2. 找不到分区就 `losetup -o 20971520 /dev/loopX /dev/mmcblk0`，把 **0xA000 扇区（20MB）之后**的内容
+   当成 ext4 直接挂载，再 `switch_root` 切到 `/sbin/init`；
+3. 两条都失败时会打印明确原因并留 rescue shell，不再直接 panic。
+
+偏移量由 `ROOTFS_OFFSET_SECTORS`（默认 40960 = 0xA000）控制，和 Parameter 里 rootfs 的 `@0x0000A000` 对齐。
+
+### 顺带修的第二处（日志里也有）
+
+```
+rockchip_emac 10204000.ethernet: failed to retrieve phy description from device tree (-19)
+rockchip_emac 10204000.ethernet: failed to probe arc emac (-19)
+```
+DTS 的 `&emac` 少了 `phy-mode = "rmii"`，`of_get_phy_mode()` 直接返回 -ENODEV，网口不会工作。已补上。
+
+### 日志里看到但**不影响启动**的告警
+
+```
+vcc_ddr: failed to apply 1200000-1200000uV constraint: -EINVAL
+rk808-regulator: error -EINVAL: failed to register 2 regulator
+rk808-regulator: probe with driver rk808-regulator failed with error -22
+```
+RK808 的前两路 DCDC（vdd_arm / vdd_core）已经成功设到 1.1V，RTC（rk808-rtc、hym8563）、声卡都正常注册，
+说明 PMIC 的 I2C 通信没问题；失败的是第 3 路（vcc_ddr）以及它之后的 LDO。
+根因是 DTS 里 `regulators` 的写法：DCDC_REG4 的 `regulator-name` 与外部固定稳压器重名（都叫 `vcc_io`），
+且给固定电压档位加了上下限约束，regulator core 在套用约束时返回 -EINVAL。
+DDR 电压是 Loader 上电时设好的，所以不影响本次启动；等系统能进去以后要收拾它，
+把 DCDC_REG4 改名为 `vcc_io_dcdc`、并去掉 vcc_ddr 那几行的 `regulator-min/max-microvolt` 即可。
+
+---
+
+## 7. 已知限制
 
 - 主线 6.12 对 RK3188 的 **Mali GPU / VPU 硬解 / HDMI 显示**没有可用驱动；本项目把 `vop0/vop1` 保持 `disabled`，
   是**纯命令行（headless）** 系统，请通过串口或 SSH 使用。
@@ -200,18 +263,19 @@ rk3188-adesk-linux/
 
 ---
 
-## 7. 这份工程做过哪些验证
+## 7.1 这份工程做过哪些验证
 
 在真实的 linux-6.12.117 源码上跑过（不是照着教程抄）：
 
 | 项目 | 结果 |
 |---|---|
 | DTS 编译成 dtb | 通过，无警告；`model`/`memory@60000000`/`chosen`/aliases（mmc0=&emmc）都已核对 |
-| zImage +模块 编译 | 见仓库 CI 运行结果（本地用 `arm-linux-gnueabihf-gcc 11.2` 编过） |
+| zImage +模块 编译 | 已由 GitHub Actions（gcc 13.3）完整编出，实机也跑起来了（见第 6 节日志） |
 | `rockchip-mkbootimg` | 实测 `make` 通过，`--pagesize 16384` 生成的 boot.img 头部可被 `unmkbootimg` 正常解析 |
 | 6.12 配置项自检 | `CONFIG_MFD_RK8XX / REGULATOR_RK808 / COMMON_CLK_RK808 / RTC_DRV_RK808 / MMC_DW_ROCKCHIP / SERIAL_8250_DW / EMAC_ROCKCHIP / AEABI / VFP` 全部在 `.config` 里确认存在，`kernel-build.sh` 会强制校验 |
 | rootfs 软件包名 | 逐个对过 `ports.ubuntu.com jammy armhf` 的 Packages 索引（main + universe），没有一个是不存在的包名 |
 | rootfs 脚本逻辑 | 在 armhf 用户态（qemu + proot）里跑过解压、fstab/network/sshd 配置、软链启用服务等步骤 |
+| initramfs | 本地实打包：852KB（cpio.gz），29 个条目，busybox 静态 armhf，newc 结构逐条解析通过 |
 | rootfs.img 真正生成 | **只能在没有 mount 权限的沙箱里跳过**：`chroot + apt` 需要 `CAP_SYS_ADMIN`。GitHub Actions 的 runner 和真实 Ubuntu 机器上没问题 |
 
 ---

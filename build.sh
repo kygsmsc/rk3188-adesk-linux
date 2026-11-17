@@ -4,6 +4,7 @@
 # 用法：
 #   ./build.sh                 # 全流程：内核 -> 根文件系统 -> 打包
 #   ./build.sh kernel          # 只编译内核 / dtb / 模块
+#   ./build.sh initramfs       # 只做 initramfs（按偏移挂载 rootfs，无分区表时必需）
 #   ./build.sh rootfs          # 只做根文件系统镜像（需先有内核模块）
 #   ./build.sh pack            # 只打包 boot.img
 #   ./build.sh --install-deps  # 先安装编译依赖（Ubuntu/Debian）
@@ -77,13 +78,14 @@ banner() {
 EOF
 }
 
-run_kernel() { bash "$ROOT/scripts/kernel-build.sh"; }
+run_kernel()    { bash "$ROOT/scripts/kernel-build.sh"; }
+run_initramfs() { bash "$ROOT/scripts/initramfs-build.sh"; }
 run_rootfs() { bash "$ROOT/scripts/rootfs-build.sh"; }
 run_pack()   { bash "$ROOT/scripts/pack-build.sh"; }
 
 ACTION="all"
 case "${1:-all}" in
-    all|kernel|rootfs|pack|deps) ACTION="$1" ;;
+    all|kernel|initramfs|rootfs|pack|deps) ACTION="$1" ;;
     --install-deps|-i) ACTION="install" ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) die "未知参数：$1（可用：all|kernel|rootfs|pack|deps|--install-deps）" ;;
@@ -99,11 +101,13 @@ banner
 
 START=$(date +%s)
 case "$ACTION" in
-    kernel) run_kernel ;;
-    rootfs) run_rootfs ;;
+    kernel)    run_kernel ;;
+    initramfs) run_initramfs ;;
+    rootfs)    run_rootfs ;;
     pack)   run_pack ;;
     all)
         run_kernel
+        run_initramfs
         run_rootfs
         run_pack
         ;;
